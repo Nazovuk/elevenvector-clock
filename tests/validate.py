@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLOCK = (ROOT / "templates/football-clock.yml").read_text()
+CLOCK = (ROOT / ".github/workflows/football-clock.yml").read_text()
 HEARTBEAT = (ROOT / ".github/workflows/keepalive.yml").read_text()
 README = (ROOT / "README.md").read_text()
 
