@@ -1,0 +1,83 @@
+name: Football clock
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+
+permissions: {}
+
+jobs:
+  invoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CRON_SECRET: ${{ secrets.FOOTBALL_CRON_SECRET }}
+      EXPECTED_SHA: ${{ vars.ELEVENVECTOR_PRODUCTION_SHA }}
+      CLOCK_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Invoke canonical scheduler
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          import urllib.error
+          import urllib.request
+
+          expected = os.environ.get("EXPECTED_SHA", "").strip()
+          secret = os.environ.get("CRON_SECRET", "")
+          if re.fullmatch(r"[0-9a-f]{40}", expected) is None:
+              print(json.dumps({"state": "INVALID_EXPECTED_SHA"}))
+              raise SystemExit(2)
+          if not secret:
+              print(json.dumps({"state": "SECRET_NOT_CONFIGURED"}))
+              raise SystemExit(2)
+
+          request = urllib.request.Request(
+              "https://elevenvector.vercel.app/api/cron/football",
+              headers={
+                  "Authorization": f"Bearer {secret}",
+                  "User-Agent": "elevenvector-public-clock/1.0",
+                  "X-Football-Trigger": "github-public-schedule",
+                  "X-Football-Run-Id": os.environ["CLOCK_RUN_ID"],
+                  "X-Football-Expected-SHA": expected,
+              },
+          )
+          status = 0
+          payload = {}
+          try:
+              with urllib.request.urlopen(request, timeout=55) as response:
+                  status = response.status
+                  raw = response.read(65537)
+          except urllib.error.HTTPError as error:
+              status = error.code
+              raw = error.read(65537)
+          except (OSError, TimeoutError) as error:
+              print(json.dumps({"state": "CLOCK_TRANSPORT_FAILURE", "error_type": type(error).__name__}))
+              raise SystemExit(1)
+
+          if len(raw) > 65536:
+              print(json.dumps({"http_status": status, "state": "RESPONSE_TOO_LARGE"}))
+              raise SystemExit(1)
+          try:
+              decoded = json.loads(raw)
+              if isinstance(decoded, dict):
+                  payload = decoded
+          except (UnicodeDecodeError, json.JSONDecodeError):
+              pass
+
+          allowed = (
+              "state",
+              "run_id",
+              "application_bytes",
+              "provider_calls",
+              "provider_call_count",
+              "error_type",
+              "error_code",
+              "code_commit",
+          )
+          receipt = {"http_status": status}
+          receipt.update({key: payload[key] for key in allowed if key in payload})
+          print(json.dumps(receipt, sort_keys=True, default=str))
+          if status != 200 or payload.get("code_commit") != expected:
+              raise SystemExit(1)
